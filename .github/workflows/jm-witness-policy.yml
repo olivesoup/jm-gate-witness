@@ -60,3 +60,19 @@ jobs:
         shell: pwsh
         run: |
           ./tests/Test-Cas-Tag-Ruleset-Readback.ps1
+      - name: Parse CAS public synthetic race script and exercise default no-op
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          $path = Join-Path $PWD 'scripts/Test-JM-Public-CAS-SyntheticRace.ps1'
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors) | Out-Null
+          if (@($errors).Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.ToString() }
+            throw 'CAS_SYNTHETIC_RACE_SCRIPT_SYNTAX_INVALID'
+          }
+          $output = & $path
+          if ($output -cne 'CAS_RACE_NOT_ACTIVATED') {
+            throw 'CAS_SYNTHETIC_RACE_DEFAULT_NOT_FAIL_CLOSED'
+          }
+          Write-Output 'CAS_SYNTHETIC_RACE_SCRIPT_SYNTAX_AND_NOOP_PASS_NO_GITHUB_MUTATION'
