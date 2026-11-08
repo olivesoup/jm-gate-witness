@@ -75,7 +75,7 @@ class WorkflowStructureChecks(unittest.TestCase):
                 with self.subTest(workflow=path.name, step=name):
                     self.assertNotIn("        run: |", script)
                     self.assertNotIn("        shell: bash", script)
-                    if "shell: pwsh" in raw and name.startswith("Parse solo-operator"):
+                    if "shell: pwsh" in raw and name.startswith(("Parse solo-operator", "Parse CAS public")):
                         continue
                     result = subprocess.run(["bash", "-n"], input=script,
                                             text=True, capture_output=True,
