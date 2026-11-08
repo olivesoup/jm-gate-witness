@@ -53,7 +53,7 @@ class FakeGitHub:
             self.refs[ref] = body["sha"]
             return {"ref": ref, "object": {"sha": body["sha"]}}
         if method == "GET" and path.startswith(PREFIX + "/git/ref/tags/"):
-            ref = path.split("/git/ref/", 1)[1]
+            ref = "refs/" + path.split("/git/ref/", 1)[1]
             return {"ref": ref, "object": {"sha": self.refs[ref]}}
         raise AssertionError((method, path))
 
