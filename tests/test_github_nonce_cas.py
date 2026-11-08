@@ -21,6 +21,7 @@ PREFIX = "/repos/olivesoup/jm-gate-witness"
 class FakeGitHub:
     def __init__(self):
         self.refs = {}
+        self.tag_objects = {}
         self.rules = [{
             "id": 9001, "name": cas.RULESET_NAME, "target": "tag",
             "enforcement": "active",
@@ -44,17 +45,23 @@ class FakeGitHub:
         if (method, path) == ("POST", PREFIX + "/git/tags"):
             assert body["object"] == MASTER and body["type"] == "commit"
             assert json.loads(body["message"])["real_gate"] is False
+            self.tag_objects[TAG_SHA] = {
+                "sha": TAG_SHA, "tag": body["tag"], "message": body["message"],
+                "object": {"sha": body["object"], "type": body["type"]},
+            }
             return {"sha": TAG_SHA}
+        if (method, path) == ("GET", PREFIX + "/git/tags/" + TAG_SHA):
+            return self.tag_objects[TAG_SHA]
         if (method, path) == ("POST", PREFIX + "/git/refs"):
             self.tries += 1
             ref = body["ref"]
             if ref in self.refs:
                 raise RuntimeError("GITHUB_REJECTED_422_ALREADY_EXISTS")
             self.refs[ref] = body["sha"]
-            return {"ref": ref, "object": {"sha": body["sha"]}}
+            return {"ref": ref, "object": {"sha": body["sha"], "type": "tag"}}
         if method == "GET" and path.startswith(PREFIX + "/git/ref/tags/"):
             ref = "refs/" + path.split("/git/ref/", 1)[1]
-            return {"ref": ref, "object": {"sha": self.refs[ref]}}
+            return {"ref": ref, "object": {"sha": self.refs[ref], "type": "tag"}}
         raise AssertionError((method, path))
 
 
@@ -62,7 +69,7 @@ class CasUnit(unittest.TestCase):
     def test_synthetic_once_not_global_gate(self):
         db = FakeGitHub()
         r = cas.commit_synthetic_nonce(db.call, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
-        self.assertTrue(r["atomic_ref_create"])
+        self.assertTrue(r["exclusive_ref_create_observed"])
         self.assertFalse(r["global_nonrollback_proven"])
         self.assertFalse(r["product_gate"])
 
@@ -124,7 +131,7 @@ class CasUnit(unittest.TestCase):
         del db.detail["rules"][0]["parameters"]
         receipt = cas.commit_synthetic_nonce(db.call, nonce=NONCE,
                                              claim_sha256=CLAIM, master_sha=MASTER)
-        self.assertTrue(receipt["atomic_ref_create"])
+        self.assertTrue(receipt["exclusive_ref_create_observed"])
         self.assertFalse(receipt["global_nonrollback_proven"])
 
     def test_tag_get_null_update_params_policy_still_matches(self):
@@ -168,6 +175,83 @@ class CasUnit(unittest.TestCase):
             return val
         with self.assertRaisesRegex(cas.CasDenied, "READBACK_MISMATCH"):
             cas.commit_synthetic_nonce(altered, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
+
+    def test_annotated_tag_message_readback_drift_denied(self):
+        db = FakeGitHub()
+        def forged(method, path, body):
+            value = db.call(method, path, body)
+            if method == "GET" and "/git/tags/" in path:
+                return dict(value, message="{}")
+            return value
+        with self.assertRaisesRegex(cas.CasDenied, "TAG_OBJECT_READBACK_MISMATCH"):
+            cas.commit_synthetic_nonce(forged, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
+        self.assertEqual(db.tries, 0, "Tag mismatch must block before ref creation")
+
+    def test_annotated_target_drift_denied(self):
+        db = FakeGitHub()
+        def forged(method, path, body):
+            value = db.call(method, path, body)
+            if method == "GET" and "/git/tags/" in path:
+                return dict(value, object={"sha": "0" * 40, "type": "commit"})
+            return value
+        with self.assertRaisesRegex(cas.CasDenied, "TAG_OBJECT_READBACK_MISMATCH"):
+            cas.commit_synthetic_nonce(forged, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
+
+    def test_ref_not_annotated_tag_type_denied(self):
+        db = FakeGitHub()
+        def forged(method, path, body):
+            value = db.call(method, path, body)
+            if method == "GET" and "/git/ref/tags/" in path:
+                return dict(value, object={"sha": TAG_SHA, "type": "commit"})
+            return value
+        with self.assertRaisesRegex(cas.CasDenied, "LIVE_REF_READBACK_MISMATCH"):
+            cas.commit_synthetic_nonce(forged, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
+
+    def test_policy_revoked_after_ref_creation_denied(self):
+        db = FakeGitHub()
+        count = [0]
+        def mutate(method, path, body):
+            if method == "GET" and path == PREFIX + "/rulesets/9001":
+                count[0] += 1
+                if count[0] > 1:
+                    db.detail["enforcement"] = "disabled"
+            return db.call(method, path, body)
+        with self.assertRaisesRegex(cas.CasDenied, "CAS_RULESET_INACTIVE"):
+            cas.commit_synthetic_nonce(mutate, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
+        self.assertEqual(db.tries, 1, "A ref may exist despite fail-closed receipt")
+
+    def test_master_moved_after_ref_creation_denied(self):
+        db = FakeGitHub()
+        count = [0]
+        def mutate(method, path, body):
+            if method == "GET" and path == PREFIX + "/branches/master":
+                count[0] += 1
+                if count[0] > 1:
+                    db.master["commit"]["sha"] = "0" * 40
+            return db.call(method, path, body)
+        with self.assertRaisesRegex(cas.CasDenied, "MASTER_CHANGED_AFTER_WRITE"):
+            cas.commit_synthetic_nonce(mutate, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
+        self.assertEqual(db.tries, 1)
+
+    def test_rule_disappeared_after_ref_creation_denied(self):
+        db = FakeGitHub()
+        count = [0]
+        def mutate(method, path, body):
+            if method == "GET" and path == PREFIX + "/rulesets":
+                count[0] += 1
+                if count[0] > 1:
+                    db.rules = []
+            return db.call(method, path, body)
+        with self.assertRaisesRegex(cas.CasDenied, "RULESET_CHANGED_AFTER_WRITE"):
+            cas.commit_synthetic_nonce(mutate, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
+
+    def test_synthetic_receipt_never_claims_global_atomic_race(self):
+        db = FakeGitHub()
+        receipt = cas.commit_synthetic_nonce(db.call, nonce=NONCE,
+                                              claim_sha256=CLAIM, master_sha=MASTER)
+        self.assertTrue(receipt["exclusive_ref_create_observed"])
+        self.assertNotIn("atomic_ref_create", receipt)
+        self.assertFalse(receipt["global_nonrollback_proven"])
 
     def test_metadata_is_public_hashonly(self):
         meta = json.loads(cas.tag_message(NONCE, CLAIM, MASTER))
