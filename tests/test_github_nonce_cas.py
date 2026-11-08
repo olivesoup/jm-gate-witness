@@ -28,8 +28,8 @@ class FakeGitHub:
         self.detail = {
             "id": 9001, "name": cas.RULESET_NAME, "target": "tag",
             "enforcement": "active", "bypass_actors": [],
-            "conditions": {"ref_name": {"include": ["jm-cas/v1/*"], "exclude": []}},
-            "rules": [{"type": "update"}, {"type": "deletion"}],
+            "conditions": {"ref_name": {"include": ["refs/tags/jm-cas/v1/*"], "exclude": []}},
+            "rules": [{"type": "update", "parameters": {"update_allows_fetch_and_merge": False}}, {"type": "deletion"}],
         }
         self.master = {"commit": {"sha": MASTER}, "protected": True}
         self.tries = 0
@@ -111,6 +111,18 @@ class CasUnit(unittest.TestCase):
         db = FakeGitHub()
         db.detail["bypass_actors"] = [{"actor_type": "OrganizationAdmin"}]
         with self.assertRaisesRegex(cas.CasDenied, "BYPASS"):
+            cas.commit_synthetic_nonce(db.call, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
+
+    def test_noncanonical_update_rule_params_denied(self):
+        db = FakeGitHub()
+        db.detail["rules"][0]["parameters"] = {"update_allows_fetch_and_merge": True}
+        with self.assertRaisesRegex(cas.CasDenied, "UPDATE_RULE_PARAMETER_UNSAFE"):
+            cas.commit_synthetic_nonce(db.call, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
+
+    def test_missing_update_params_denied(self):
+        db = FakeGitHub()
+        del db.detail["rules"][0]["parameters"]
+        with self.assertRaisesRegex(cas.CasDenied, "UPDATE_RULE_PARAMETER_UNSAFE"):
             cas.commit_synthetic_nonce(db.call, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
 
     def test_rule_update_protection_missing_denied(self):
