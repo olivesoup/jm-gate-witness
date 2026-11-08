@@ -63,6 +63,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/jm-public-hash-verifier"
+          # Reject ambiguous, expired or unexpected artifacts before download.
+          artifact_meta="$(gh api "repos/olivesoup/jm-gate-witness/actions/runs/$RUN_ID/artifacts?per_page=100")"
+          printf '%s' "$artifact_meta" | jq -e '
+            .total_count == 1 and
+            (.artifacts | type == "array") and
+            (.artifacts | length == 1) and
+            .artifacts[0].name == "jm-public-synthetic-hash-claim" and
+            .artifacts[0].expired == false and
+            (.artifacts[0].size_in_bytes | type == "number") and
+            .artifacts[0].size_in_bytes > 0 and
+            .artifacts[0].size_in_bytes < 65536' >/dev/null
           gh run download "$RUN_ID" --repo olivesoup/jm-gate-witness \
             --name jm-public-synthetic-hash-claim \
             --dir "$RUNNER_TEMP/jm-public-hash-verifier"
