@@ -32,7 +32,8 @@ if ($checks[0].parameters.strict_required_status_checks_policy -ne $true -or
     $required[0].integration_id -ne $app) { throw 'STRICT_CI_CHECK_CHANGED' }
 if ($pr[0].parameters.required_review_thread_resolution -ne $true -or
     $pr[0].parameters.require_code_owner_review -ne $false -or
-    @($pr[0].parameters.required_reviewers).Count -ne 0) { throw 'REVIEW_THREAD_OR_OWNER_POLICY_CHANGED' }
+    @($pr[0].parameters.required_reviewers).Count -ne 0 -or
+    $pr[0].parameters.dismiss_stale_reviews_on_push -ne $true) { throw 'REVIEW_THREAD_OR_OWNER_POLICY_CHANGED' }
 
 if ($pr[0].parameters.required_approving_review_count -eq 0 -and
     $pr[0].parameters.require_last_push_approval -eq $false -and
@@ -82,13 +83,18 @@ if ($after.id -ne $id -or $after.enforcement -cne 'active' -or
     ($afterTypes -join '|') -cne ($expected -join '|') -or
     @($after.conditions.ref_name.include).Count -ne 1 -or
     $after.conditions.ref_name.include[0] -cne '~DEFAULT_BRANCH' -or
+    @($after.conditions.ref_name.exclude).Count -ne 0 -or
     $afterPr.Count -ne 1 -or
     $afterPr[0].parameters.required_approving_review_count -ne 0 -or
     $afterPr[0].parameters.require_last_push_approval -ne $false -or
     $afterPr[0].parameters.require_extra_approval_for_unattributed_changes -ne $false -or
     $afterPr[0].parameters.required_review_thread_resolution -ne $true -or
+    $afterPr[0].parameters.dismiss_stale_reviews_on_push -ne $true -or
+    $afterPr[0].parameters.require_code_owner_review -ne $false -or
+    @($afterPr[0].parameters.required_reviewers).Count -ne 0 -or
     $afterChecks.Count -ne 1 -or
     $afterChecks[0].parameters.strict_required_status_checks_policy -ne $true -or
+    $afterChecks[0].parameters.do_not_enforce_on_create -eq $true -or
     $afterRequired.Count -ne 1 -or
     $afterRequired[0].context -cne $context -or
     $afterRequired[0].integration_id -ne $app) { throw 'SOLO_POLICY_READBACK_MISMATCH' }
