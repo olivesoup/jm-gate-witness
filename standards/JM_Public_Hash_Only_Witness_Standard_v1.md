@@ -1,4 +1,4 @@
-# JM Public Hash-Only Witness Standard v1.1 — Solo Operator Governance
+# JM Public Hash-Only Witness Standard v1.2 — Solo Operator & Protected-Base Guard
 
 Status: STAGED SOURCE ONLY; NOT TRUSTED SIGNING, LEDGER, VM ATTESTATION, REAL GATE, MERGE OR ACTIVATE.
 
@@ -29,3 +29,11 @@ Any unprovisioned rule, issuer, attestation, verifier, CAS ledger, Check publish
 - Replaces the mistaken v1 premise that this solo-operated project can supply an unrelated GitHub collaborator for an approval. It cannot. The human review requirement moves to **separate explicit owner final decisions**; machine-enforced security retains PR-only protection, strict current-head check, no bypass, and independent exact-head role-review evidence in GitHub Issues.
 - Operator policy migration script: `scripts/Set-JM-Witness-Solo-Ruleset.ps1`. It changes only the contradictory GitHub approval settings and preserves all other protective rules, with live-before/live-after readback.
 - A passing `jm-witness-policy` on candidate PR source is a **test result, not an independent security attestation**. It is necessary but insufficient for signing, Guest admission, real Host gate, or release.
+
+## v1.2 Threat remediation: PR-controlled green checks are not a trust anchor
+
+- A GitHub required check `jm-witness-policy` created by PR-controlled `.github/workflows/jm-witness-policy.yml` can be forged by changing its own steps in a future PR. Pinning GitHub Actions app ID 15368 does **not** pin a protected workflow implementation. Therefore treat this job as **source CI only** and never sufficient for signer/Host/CAS or merging a trust-root change.
+- Introduce `.github/workflows/jm-witness-protected-oracle.yml` on **protected master**, invoked via `pull_request_target` and **without checkout, execution, import, dependency install or script execution from PR head**. It must obtain read-only live GitHub PR metadata/files through authenticated REST, confirm exact repo/ref/head/base binding, bound pagination, and deny additions, modifications, deletions and renames touching `.github/`, `witness/`, `tests/`, `standards/`, `scripts/`, or `automation/` after bootstrap. The only routine PR updates allowed are explicitly listed low-trust public documentation paths.
+- `pull_request_target` runs on the **base SHA**, not necessarily the PR head. A successful job cannot be assumed to satisfy a PR-head required status. The independent reviewer/Judge must verify the identity of the protected-base workflow run, the event, immutable base SHA, bound PR head, and the actual result; a future required-check promotion needs measured PR-head context association or a trusted separate Check publisher, not a guessed status name.
+- It cannot protect its **own initial bootstrap merge**, before the trusted oracle exists on `master`. For bootstrap, demand successful exact-head CI, thorough AI role reviews recorded in GitHub, and explicit sole-human exact-head MERGE (then separately ACTIVATE) as distinct real gates; document this one-time trust-on-first-use risk. Until independent verification establishes genuine PR-head protection, `PROTECTED_ORACLE_ENFORCED=BLOCK`.
+- A PR can attempt to impersonate an Actions job context even when the native Actions app integration is pinned. Never equate matching check *name* with verified protected-workflow *identity*. Correct proof requires trusted workflow file path, protected base ref/SHA, GitHub run ID/event, exact PR head, trustworthy check publisher and negative tampering evidence. No signal may be upgraded without these.
