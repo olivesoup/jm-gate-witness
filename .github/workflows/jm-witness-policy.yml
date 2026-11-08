@@ -44,3 +44,15 @@ jobs:
           }
           Write-Output 'SOLO_RULESET_SCRIPT_SYNTAX_OK_NOT_EXECUTED'
 
+      - name: Parse CAS public tag ruleset migration without executing it
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          $path = Join-Path $PWD 'scripts/Set-JM-Public-Nonce-CAS-Tag-Ruleset.ps1'
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -ne 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.ToString() }
+            throw 'CAS_TAG_RULESET_SCRIPT_SYNTAX_INVALID'
+          }
+          Write-Output 'CAS_TAG_RULESET_SCRIPT_SYNTAX_OK_NOT_EXECUTED'
