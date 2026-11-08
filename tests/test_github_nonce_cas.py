@@ -119,9 +119,25 @@ class CasUnit(unittest.TestCase):
         with self.assertRaisesRegex(cas.CasDenied, "UPDATE_RULE_PARAMETER_UNSAFE"):
             cas.commit_synthetic_nonce(db.call, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
 
-    def test_missing_update_params_denied(self):
+    def test_tag_get_omits_update_params_and_policy_still_matches(self):
         db = FakeGitHub()
         del db.detail["rules"][0]["parameters"]
+        receipt = cas.commit_synthetic_nonce(db.call, nonce=NONCE,
+                                             claim_sha256=CLAIM, master_sha=MASTER)
+        self.assertTrue(receipt["atomic_ref_create"])
+        self.assertFalse(receipt["global_nonrollback_proven"])
+
+    def test_tag_get_null_update_params_policy_still_matches(self):
+        db = FakeGitHub()
+        db.detail["rules"][0]["parameters"] = None
+        receipt = cas.commit_synthetic_nonce(db.call, nonce=NONCE,
+                                             claim_sha256=CLAIM, master_sha=MASTER)
+        self.assertFalse(receipt["product_gate"])
+
+    def test_unexpected_update_params_denied(self):
+        db = FakeGitHub()
+        db.detail["rules"][0]["parameters"] = {"update_allows_fetch_and_merge": False,
+                                                 "extra": True}
         with self.assertRaisesRegex(cas.CasDenied, "UPDATE_RULE_PARAMETER_UNSAFE"):
             cas.commit_synthetic_nonce(db.call, nonce=NONCE, claim_sha256=CLAIM, master_sha=MASTER)
 
