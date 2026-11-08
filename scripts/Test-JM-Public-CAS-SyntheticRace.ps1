@@ -74,27 +74,55 @@ try {
       if ([DateTime]::UtcNow -gt $until) { return [pscustomobject]@{ code=99; conflict=$false; ok=$false } }
       Start-Sleep -Milliseconds 30
     }
+    # Native HTTPS supplies a structured Response.StatusCode on HTTP failure;
+    # never parse freely formatted gh stderr for a 409/422.
     $startedUtc=[DateTime]::UtcNow.ToString('o')
-    $output=@(& gh api --method POST "repos/$repository/git/refs" -f "ref=$theRef" -f "sha=$theSha" 2>&1)
-    $code=[int]$LASTEXITCODE
-    $finishedUtc=[DateTime]::UtcNow.ToString('o')
-    $msg=$output -join [Environment]::NewLine
     $verified=$false
-    if ($code -eq 0) {
-      try {
-        $parsed=$msg | ConvertFrom-Json -ErrorAction Stop
-        if ($null -ne $parsed -and
-            $parsed -is [pscustomobject] -and
-            $parsed.ref -ceq $theRef -and
-            $parsed.object.sha -ceq $theSha -and
-            $parsed.object.type -ceq 'tag') { $verified=$true }
-      } catch { $verified=$false }
-    }
     $conflictStatus=0
-    if ($code -ne 0) {
-      $m=[regex]::Match($msg,'HTTP (409|422)(?![0-9])')
-      if ($m.Success) { $conflictStatus=[int]$m.Groups[1].Value }
+    $code=1
+    $credential=@()
+    try {
+      $credential=@(& gh auth token 2>$null)
+      if ($LASTEXITCODE -ne 0 -or $credential.Count -ne 1 -or
+          [string]::IsNullOrWhiteSpace($credential[0])) {
+        throw 'CAS_RACE_AUTH_TOKEN_NOT_AVAILABLE'
+      }
+      $payload = @{ref=$theRef;sha=$theSha} | ConvertTo-Json -Compress
+      $header = @{
+        Authorization = 'Bearer ' + [string]$credential[0]
+        Accept = 'application/vnd.github+json'
+        'X-GitHub-Api-Version' = '2022-11-28'
+      }
+      $answer = Invoke-RestMethod -Uri ("https://api.github.com/repos/" + $repository + "/git/refs") -Method Post `
+        -Headers $header -ContentType 'application/json' -Body $payload -ErrorAction Stop
+      if ($null -ne $answer -and
+          $answer -is [pscustomobject] -and
+          $answer.ref -ceq $theRef -and
+          $null -ne $answer.object -and
+          $answer.object.sha -ceq $theSha -and
+          $answer.object.type -ceq 'tag') {
+        $verified=$true
+        $code=0
+      }
+    } catch {
+      # The exception text is untrusted. Only an actual provider HTTP response
+      # has an authoritative status, and transport/auth failures are BLOCK.
+      $exception=$_.Exception
+      $responseProperty=$exception.PSObject.Properties['Response']
+      if ($null -ne $responseProperty -and $null -ne $responseProperty.Value) {
+        $statusProperty=$responseProperty.Value.PSObject.Properties['StatusCode']
+        if ($null -ne $statusProperty -and $null -ne $statusProperty.Value) {
+          $numericStatus=[int]$statusProperty.Value
+          if ($numericStatus -eq 409 -or $numericStatus -eq 422) {
+            $conflictStatus=$numericStatus
+          }
+        }
+      }
+    } finally {
+      $credential=@()
+      $header=$null
     }
+    $finishedUtc=[DateTime]::UtcNow.ToString('o')
     return [pscustomobject]@{
       code=$code
       conflict=[bool]($conflictStatus -eq 409 -or $conflictStatus -eq 422)
