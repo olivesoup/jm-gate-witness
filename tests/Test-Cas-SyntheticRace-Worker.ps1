@@ -14,7 +14,7 @@ $writers=@($ast.FindAll({
   $node.Left.VariablePath.UserPath -ceq 'writer'
 },$true))
 if ($writers.Count -ne 1) { throw 'CAS_RACE_WRITER_BLOCK_NOT_UNIQUE' }
-$writer=[ScriptBlock]::Create($writers[0].Right.Extent.Text)
+$writer= & ([ScriptBlock]::Create($writers[0].Right.Extent.Text))
 $theRef='refs/tags/jm-cas/v1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 $sha='b' * 40
 $go=Join-Path ([IO.Path]::GetTempPath()) ('cas-unit-go-'+[guid]::NewGuid().ToString('N'))
