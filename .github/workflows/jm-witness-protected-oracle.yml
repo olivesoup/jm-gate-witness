@@ -1,0 +1,37 @@
+# Protected-base policy oracle. This file takes effect ONLY on protected master.
+# pull_request_target loads workflow code from base, NEVER from PR head.
+name: JM Protected Base Policy Oracle
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: jm-protected-oracle-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  protected-base-oracle:
+    name: jm-witness-protected-base-oracle
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted protected-base SHA ONLY
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Classify untrusted PR metadata as data ONLY
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXPECTED_PR: ${{ github.event.pull_request.number }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'olivesoup/jm-gate-witness'
+          test "$GITHUB_EVENT_NAME" = 'pull_request_target'
+          python3 witness/protected_oracle.py
+          echo 'JM_WITNESS_NOT_INDEPENDENT_SIGNER_OR_REAL_GATE'
