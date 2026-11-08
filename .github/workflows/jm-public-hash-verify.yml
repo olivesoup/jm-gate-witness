@@ -95,18 +95,4 @@ jobs:
             --source-digest "$EXPECTED_HEAD" \
             --deny-self-hosted-runners \
             --format json > verified-bootstrap-attestation.json
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          result = json.loads(Path("verified-bootstrap-attestation.json").read_text())
-          if not isinstance(result, list) or not any(
-              isinstance(x, dict)
-              and isinstance(x.get("verificationResult"), dict)
-              and isinstance(x["verificationResult"].get("verifiedTimestamps"), list)
-              and x["verificationResult"]["verifiedTimestamps"]
-              for x in result
-          ):
-              raise SystemExit("JM_PUBLIC_SIGSTORE_SIGNED_TIMESTAMP_ABSENT")
-          print("JM_PUBLIC_BOOTSTRAP_SEPARATE_PROTECTED_WORKFLOW_CRYPTO_VERIFIED")
-          print("JM_ISSUER_CAS_HOST_VM_FIVE_REPO_GATE=BLOCK_NOT_ATTESTED")
-          PY
+          python3 "$GITHUB_WORKSPACE/witness/attestation_result.py" verified-bootstrap-attestation.json jm-witness-bootstrap-public-hash-claim.json
