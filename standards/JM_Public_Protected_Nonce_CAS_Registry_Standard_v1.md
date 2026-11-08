@@ -13,3 +13,9 @@ Status: CANDIDATE. GitHub public persistent CAS backend source; **not yet provis
 - Strong privacy: all refs, tags and messages PUBLIC; the claim must have public scope and four zero digests. No private release set references in plaintext. Logs print only nonce digest and state without GitHub auth tokens.
 - No auto merge or activation. Independent Mainline, Adversarial and Judge exact-head review, then explicit sole human MERGE, followed by distinct later ACTIVATE before any privileged `contents:write` production operation.
 - Separate scope: a bounded synthetic **CAS test** may be executed after signed-public Witness and tag ruleset are ready; a synthetic success is **not** a product global CAS Gate. Production issuer adapter and independent Check publisher remain BLOCK until complete external proof.
+
+## GitHub REST schema correction after native HTTP 422 (2026-11-08)
+- The tag ruleset's `conditions.ref_name.include` MUST be the complete Git ref glob `refs/tags/jm-cas/v1/*`, not the shorter Git tag-name-only glob. Tag creation uses `refs/tags/` in the REST ref endpoint; matching ruleset conditions must be unambiguous.
+- The `update` rule MUST provide `parameters.update_allows_fetch_and_merge=false` per GitHub REST ruleset request schema. Missing this required boolean can be rejected with HTTP 422. Deletion rule takes no parameters.
+- Readback must independently verify the exact full-ref matcher, single `update` rule and its exact false parameter, deletion rule, active enforcement, no bypass actors, no creation restriction. Never reinterpret a 422 as success.
+- This migration is an **administrator policy configuration**, not an issue of GitHub Runner VM permissions or a signed product Gate. No Tag namespace was deployed by the rejected request; owner executes only corrected immutable script after CI.
