@@ -65,6 +65,8 @@ try {
       $text -match '\.Contains\(\$theSha\)') {
     throw 'CAS_PRODUCTION_EXCLUSIVITY_GUARD_OR_PARSER_MISSING'
   }
+  # Mocked failed HTTP requests leave LASTEXITCODE=1; reset only after all assertions.
+  $global:LASTEXITCODE = 0
   Write-Output 'CAS_RACE_REAL_WORKER_NEGATIVE_POWERSHELL_PASS_NO_GITHUB_API'
 } finally {
   Remove-Item -LiteralPath $go,$ready -Force -ErrorAction SilentlyContinue
