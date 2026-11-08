@@ -76,3 +76,7 @@ jobs:
             throw 'CAS_SYNTHETIC_RACE_DEFAULT_NOT_FAIL_CLOSED'
           }
           Write-Output 'CAS_SYNTHETIC_RACE_SCRIPT_SYNTAX_AND_NOOP_PASS_NO_GITHUB_MUTATION'
+      - name: Native PowerShell negative-test the actual race writer block
+        shell: pwsh
+        run: |
+          ./tests/Test-Cas-SyntheticRace-Worker.ps1
