@@ -65,6 +65,74 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
         with:
           subject-path: jm-witness-bootstrap-public-hash-claim.json
+      - name: Verify synthetic attestation via Sigstore identity and public timestamp
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from witness.hash_claim import parse_untrusted
+          claim = parse_untrusted(Path("jm-witness-bootstrap-public-hash-claim.json").read_bytes())
+          assert claim["claim_kind"] == "EVIDENCE_ONLY_NOT_GATE"
+          assert all(claim[k] == "0" * 64 for k in (
+              "source_root_sha256", "output_root_sha256",
+              "host_receipt_sha256", "release_set_sha256"))
+          print("JM_WITNESS_BOOTSTRAP_PUBLIC_SYNTHETIC_ONLY")
+          PY
+          test "$GITHUB_REPOSITORY" = 'olivesoup/jm-gate-witness'
+          test "$GITHUB_REF" = 'refs/heads/master'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          echo "$GITHUB_SHA" | grep -Eq '^[0-9a-f]{40}        shell: bash
+        env:
+          ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+        run: |
+          set -euo pipefail
+          test -n "$ATTESTATION_URL"
+          echo "JM_WITNESS_SIGSTORE_BOOTSTRAP_ATTESTATION_URL=$ATTESTATION_URL"
+          echo "JM_WITNESS_SIGNED_REAL_HOST_GATE=BLOCK_BOOTSTRAP_ONLY"
+
+          # GitHub's signed public attestation must bind this immutable master SHA.
+          success=false
+          for i in 1 2 3 4 5; do
+            if gh attestation verify jm-witness-bootstrap-public-hash-claim.json \
+              --repo olivesoup/jm-gate-witness \
+              --signer-workflow olivesoup/jm-gate-witness/.github/workflows/jm-public-hash-attest.yml \
+              --signer-digest "$GITHUB_SHA" \
+              --source-ref refs/heads/master \
+              --source-digest "$GITHUB_SHA" \
+              --deny-self-hosted-runners \
+              --format json > verified-bootstrap-attestation.json; then
+              success=true
+              break
+            fi
+            sleep 4
+          done
+          test "$success" = true
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data = json.loads(Path("verified-bootstrap-attestation.json").read_text())
+          if not isinstance(data, list) or not data:
+              raise SystemExit("JM_BOOTSTRAP_SIGSTORE_VERIFICATION_EMPTY")
+          if not any(isinstance(item, dict)
+                     and isinstance(item.get("verificationResult"), dict)
+                     and isinstance(item["verificationResult"].get("verifiedTimestamps"), list)
+                     and item["verificationResult"]["verifiedTimestamps"]
+                     for item in data):
+              raise SystemExit("JM_BOOTSTRAP_NO_SIGNED_PUBLIC_TRANSPARENCY_TIMESTAMP")
+          print("JM_BOOTSTRAP_SIGSTORE_CRYPTO_VERIFIED_IN_SIGNER_JOB_ONLY")
+          print("JM_REAL_HOST_CAS_VM_GATE=BLOCK_NOT_ATTESTED")
+          PY
+      - name: Publish exact public synthetic claim for external independent verification
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: jm-public-synthetic-hash-claim
+          path: jm-witness-bootstrap-public-hash-claim.json
+          if-no-files-found: error
+          retention-days: 30
+          archive: false
       - name: Report attestation reference as NON-REAL-GATE evidence
         shell: bash
         env:
