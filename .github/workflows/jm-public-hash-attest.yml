@@ -102,21 +102,7 @@ jobs:
             sleep 4
           done
           test "$success" = true
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          data = json.loads(Path("verified-bootstrap-attestation.json").read_text())
-          if not isinstance(data, list) or not data:
-              raise SystemExit("JM_BOOTSTRAP_SIGSTORE_VERIFICATION_EMPTY")
-          if not any(isinstance(item, dict)
-                     and isinstance(item.get("verificationResult"), dict)
-                     and isinstance(item["verificationResult"].get("verifiedTimestamps"), list)
-                     and item["verificationResult"]["verifiedTimestamps"]
-                     for item in data):
-              raise SystemExit("JM_BOOTSTRAP_NO_SIGNED_PUBLIC_TRANSPARENCY_TIMESTAMP")
-          print("JM_BOOTSTRAP_SIGSTORE_CRYPTO_VERIFIED_IN_SIGNER_JOB_ONLY")
-          print("JM_REAL_HOST_CAS_VM_GATE=BLOCK_NOT_ATTESTED")
-          PY
+          python3 witness/attestation_result.py verified-bootstrap-attestation.json jm-witness-bootstrap-public-hash-claim.json
       - name: Publish exact public synthetic claim for external independent verification
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
