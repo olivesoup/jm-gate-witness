@@ -30,7 +30,7 @@ EXPECTED = {
         "Classify untrusted PR metadata as data ONLY",
     },
 }
-STEP = re.compile(r"^      - name: (.+)$")
+STEP = re.compile(r"^      - name: (.+)$", re.MULTILINE)
 RUN = re.compile(r"^        run: \|\s*$")
 
 
