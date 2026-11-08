@@ -1,4 +1,5 @@
-# Native PowerShell negative tests of the REAL writer scriptblock; no GitHub API calls.
+# Native negative tests execute the ACTUAL synthetic race writer AST, with
+# a fake GitHub token and mocked HTTPS REST; ZERO network/API mutations.
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
@@ -19,55 +20,136 @@ $theRef='refs/tags/jm-cas/v1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 $sha='b' * 40
 $go=Join-Path ([IO.Path]::GetTempPath()) ('cas-unit-go-'+[guid]::NewGuid().ToString('N'))
 $ready=Join-Path ([IO.Path]::GetTempPath()) ('cas-unit-ready-'+[guid]::NewGuid().ToString('N'))
-$script:mockMessage=''
-$script:mockCode=0
+$script:mockMode='ok'
+$script:mockStatus=0
+$script:mockHttpObject=$null
+$script:mockToken='FAKE_TEST_TOKEN_NEVER_USE'
+$script:mockAuthFails=$false
+$script:mockRestCalls=0
+
+# The production REST client catches real HTTP exceptions whose Response has
+# a provider StatusCode; this test mimics that typed object without text parsing.
+Add-Type -TypeDefinition @'
+using System;
+public class JMTestHttpResponse {
+    public int StatusCode { get; }
+    public JMTestHttpResponse(int status) { StatusCode = status; }
+}
+public class JMTestHttpException : Exception {
+    public JMTestHttpResponse Response { get; }
+    public JMTestHttpException(int status) : base("untrusted diagnostic HTTP 422") {
+        Response = new JMTestHttpResponse(status);
+    }
+}
+'@
+
 function gh {
-  $global:LASTEXITCODE=[int]$script:mockCode
-  Write-Output $script:mockMessage
+  param([string]$auth,[string]$verb)
+  if ($auth -cne 'auth' -or $verb -cne 'token') { throw 'CAS_TEST_UNEXPECTED_GH_CALL' }
+  if ($script:mockAuthFails) { $global:LASTEXITCODE=1; return }
+  $global:LASTEXITCODE=0
+  return $script:mockToken
+}
+function Invoke-RestMethod {
+  [CmdletBinding()]
+  param(
+    [string]$Uri,
+    [string]$Method,
+    [hashtable]$Headers,
+    [string]$ContentType,
+    [string]$Body
+  )
+  $script:mockRestCalls++
+  if ($Uri -cne 'https://api.github.com/repos/olivesoup/jm-gate-witness/git/refs' -or
+      $Method -cne 'Post' -or
+      $ContentType -cne 'application/json' -or
+      $Headers.Authorization -cne ('Bearer '+$script:mockToken) -or
+      $Headers.Accept -cne 'application/vnd.github+json') {
+    throw 'CAS_TEST_UNEXPECTED_REST_TARGET_OR_AUTH'
+  }
+  $parsedBody=$Body | ConvertFrom-Json -ErrorAction Stop
+  if ($parsedBody.ref -cne $theRef -or $parsedBody.sha -cne $sha) {
+    throw 'CAS_TEST_WRONG_REF_REQUEST_BODY'
+  }
+  if ($script:mockMode -ceq 'http') {
+    throw [JMTestHttpException]::new($script:mockStatus)
+  }
+  if ($script:mockMode -ceq 'text-spoof') {
+    throw [System.Exception]::new('TRANSIENT_AUTH_ERROR: fake message HTTP 422')
+  }
+  if ($script:mockMode -ceq 'transport') {
+    throw [System.Net.WebException]::new('DNS/TLS/network: fake HTTP 422')
+  }
+  if ($script:mockMode -ceq 'wrong-ref') {
+    return [pscustomobject]@{ref='refs/tags/jm-cas/v1/other';object=[pscustomobject]@{sha=$sha;type='tag'}}
+  }
+  if ($script:mockMode -ceq 'wrong-type') {
+    return [pscustomobject]@{ref=$theRef;object=[pscustomobject]@{sha=$sha;type='commit'}}
+  }
+  if ($script:mockMode -ceq 'wrong-sha') {
+    return [pscustomobject]@{ref=$theRef;object=[pscustomobject]@{sha=('0'*40);type='tag'}}
+  }
+  return [pscustomobject]@{ref=$theRef;object=[pscustomobject]@{sha=$sha;type='tag'}}
+}
+function Test-Writer {
+  return (& $writer 'olivesoup/jm-gate-witness' $theRef $sha $go $ready)
+}
+function Assert-Unknown([string]$scenario) {
+  $result=Test-Writer
+  if ($result.ok -or $result.conflict -or $result.code -eq 0 -or
+      $result.httpConflictStatus -ne 0) {
+    throw ('CAS_RACE_FALSE_HTTP_RESPONSE_CLASSIFICATION_'+$scenario)
+  }
 }
 try {
   [IO.File]::WriteAllText($go,'GO')
-  $script:mockMessage='{"ref":"'+$theRef+'","object":{"sha":"'+$sha+'","type":"tag"}}'
-  $script:mockCode=0
-  $valid= & $writer 'olivesoup/jm-gate-witness' $theRef $sha $go $ready
-  if (-not $valid.ok -or $valid.conflict -or $valid.code -ne 0) { throw 'CAS_JSON_VALID_RESPONSE_REJECTED' }
+  $valid=Test-Writer
+  if (-not $valid.ok -or $valid.conflict -or $valid.code -ne 0 -or
+      $valid.httpConflictStatus -ne 0) { throw 'CAS_RACE_VALID_JSON_RESPONSE_REJECTED' }
 
-  # This is the exact previous defect: two substrings in text must NOT pass.
-  $script:mockMessage='DIAGNOSTIC MESSAGE: '+$theRef+' / '+$sha
-  $fake= & $writer 'olivesoup/jm-gate-witness' $theRef $sha $go $ready
-  if ($fake.ok -or $fake.conflict) { throw 'CAS_SUBSTRING_SPOOF_ACCEPTED' }
-
-  $script:mockMessage='{"ref":"'+$theRef+'","object":{"sha":"'+$sha+'","type":"commit"}}'
-  $wrongType= & $writer 'olivesoup/jm-gate-witness' $theRef $sha $go $ready
-  if ($wrongType.ok) { throw 'CAS_WRONG_OBJECT_TYPE_ACCEPTED' }
-
-  $script:mockMessage='{"ref":"refs/tags/other","object":{"sha":"'+$sha+'","type":"tag"}}'
-  $wrongRef= & $writer 'olivesoup/jm-gate-witness' $theRef $sha $go $ready
-  if ($wrongRef.ok) { throw 'CAS_WRONG_REF_ACCEPTED' }
-
-  $script:mockCode=1
-  $script:mockMessage='gh: Validation Failed (HTTP 422)'
-  $loser= & $writer 'olivesoup/jm-gate-witness' $theRef $sha $go $ready
-  if ($loser.ok -or -not $loser.conflict -or $loser.httpConflictStatus -ne 422) {
-    throw 'CAS_REAL_HTTP_CONFLICT_NOT_CAPTURED'
+  foreach ($scenario in @('wrong-ref','wrong-type','wrong-sha')) {
+    $script:mockMode=$scenario
+    Assert-Unknown $scenario
   }
-  $script:mockMessage='gh: Bad credentials (HTTP 401)'
-  $badCredential= & $writer 'olivesoup/jm-gate-witness' $theRef $sha $go $ready
-  if ($badCredential.ok -or $badCredential.conflict) { throw 'CAS_401_MASQUERADING_CONFLICT' }
 
-  # Simulate two successful writer objects; production count guard must reject.
+  $script:mockMode='http'
+  foreach ($status in @(409,422)) {
+    $script:mockStatus=$status
+    $loser=Test-Writer
+    if ($loser.ok -or -not $loser.conflict -or $loser.code -eq 0 -or
+        $loser.httpConflictStatus -ne $status) {
+      throw ('CAS_RACE_REAL_STRUCTURED_HTTP_CONFLICT_NOT_CAPTURED_'+$status)
+    }
+  }
+
+  foreach ($status in @(400,401,403,404,429,500,503)) {
+    $script:mockStatus=$status
+    Assert-Unknown ('real-http-'+$status)
+  }
+
+  $script:mockMode='text-spoof'
+  Assert-Unknown 'fake-error-text-containing-HTTP-422'
+  $script:mockMode='transport'
+  Assert-Unknown 'transport-error-containing-HTTP-422'
+
+  $script:mockAuthFails=$true
+  Assert-Unknown 'gh-token-auth-failed'
+  $script:mockAuthFails=$false
+  $script:mockMode='ok'
+
   $results=@($valid,$valid)
-  $wins=@($results | Where-Object { $_.ok -eq $true -and $_.code -eq 0 }).Count
-  if ($wins -ne 2) { throw 'CAS_DUPLICATE_WINNER_FIXTURE_INVALID' }
-  $text=[IO.File]::ReadAllText($source)
-  if ($text -notmatch 'CAS_RACE_ONE_WINNER_ONE_CONFLICT_NOT_PROVEN' -or
-      $text -match '\.Contains\(\$theRef\)' -or
-      $text -match '\.Contains\(\$theSha\)') {
-    throw 'CAS_PRODUCTION_EXCLUSIVITY_GUARD_OR_PARSER_MISSING'
+  if (@($results | Where-Object {$_.ok -eq $true -and $_.code -eq 0}).Count -ne 2) {
+    throw 'CAS_RACE_DOUBLE_SUCCESS_FIXTURE_BAD'
   }
-  # Mocked failed HTTP requests leave LASTEXITCODE=1; reset only after all assertions.
-  $global:LASTEXITCODE = 0
-  Write-Output 'CAS_RACE_REAL_WORKER_NEGATIVE_POWERSHELL_PASS_NO_GITHUB_API'
+  $sourceBytes=[IO.File]::ReadAllText($source)
+  if ($sourceBytes -notmatch 'CAS_RACE_ONE_WINNER_ONE_CONFLICT_NOT_PROVEN' -or
+      $sourceBytes -match '\[regex\]::Match\(\$msg' -or
+      $sourceBytes -match 'gh api --method POST "repos/\$repository/git/refs"') {
+    throw 'CAS_RACE_STATUS_SPOOF_FIX_NOT_ENFORCED'
+  }
+  if ($script:mockRestCalls -lt 13) { throw 'CAS_RACE_HTTP_NEGATIVE_FIXTURES_NOT_EXERCISED' }
+  $global:LASTEXITCODE=0
+  Write-Output 'CAS_RACE_STRUCTURED_HTTP_PROVIDER_STATUS_NEGATIVE_PASS_NO_GITHUB_API'
 } finally {
   Remove-Item -LiteralPath $go,$ready -Force -ErrorAction SilentlyContinue
 }
