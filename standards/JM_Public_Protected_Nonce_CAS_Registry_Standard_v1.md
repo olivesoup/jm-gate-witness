@@ -1,0 +1,15 @@
+# JM Public protected nonce CAS registry — Standard v1
+
+Status: CANDIDATE. GitHub public persistent CAS backend source; **not yet provisioned or authorized as a product Gate**.
+
+## Decision and single-founder cost constraints
+- Use existing **public** `olivesoup/jm-gate-witness` Git object/ref storage as the persistent registry, rather than a paid database or a new human account.
+- Global namespace within this issuer: `refs/tags/jm-cas/v1/<nonce>`, nonce exactly 32 lowercase hexadecimal characters; **nonce is the entire uniqueness key**. Do not embed claim digest in the ref name or duplicates under one nonce could coexist.
+- Each claim is bound to an **annotated Git tag object** with explicit public `JM-CAS-BOUND-V1` canonical metadata: nonce, sha256 of a prior independently verified PUBLIC EVIDENCE_ONLY claim, immutable protected master source SHA and issuer identity. No private Java, logs, paths, host names or secret metadata.
+- GitHub `POST /git/refs` on this unique tag name provides exclusive reference creation: one of two racing requests may create the ref; every loser MUST fail-closed. Treat `409` / `422` as DENY, NOT success. No check/Host/merge is published by recording a nonce.
+- A **separate ACTIVE tag ruleset** targeting tag pattern `jm-cas/v1/*` must prohibit updates and deletions, with **zero bypass**. It MUST NOT prohibit creations, or legitimate unique nonce registration would deadlock. Admin creates ruleset once through versioned bounded script; exact live REST readback required. Existing protected master Ruleset 26785842 remains unchanged.
+- Existing GitHub repository admin could disable the tag ruleset, recover GitHub accounts, delete the repository or roll back external state. Therefore this storage is **not an independent globally nonrollback database under administrator compromise**; independently witnessed Sigstore/Rekor signed checkpoint + separate verification and recheck of tag ref remain mandatory to claim a stronger external transparency property.
+- A GitHub signed artifact alone cannot prove the Host ran, VM identity, Guest result, teardown or cross-repo acceptance. The registry may hold **only synthetic bootstrap evidence** until trusted issuer and independent Host receipt exist. Never use a GitHub API token from PR/Guest/Tier-A untrusted candidate code.
+- Strong privacy: all refs, tags and messages PUBLIC; the claim must have public scope and four zero digests. No private release set references in plaintext. Logs print only nonce digest and state without GitHub auth tokens.
+- No auto merge or activation. Independent Mainline, Adversarial and Judge exact-head review, then explicit sole human MERGE, followed by distinct later ACTIVATE before any privileged `contents:write` production operation.
+- Separate scope: a bounded synthetic **CAS test** may be executed after signed-public Witness and tag ruleset are ready; a synthetic success is **not** a product global CAS Gate. Production issuer adapter and independent Check publisher remain BLOCK until complete external proof.
