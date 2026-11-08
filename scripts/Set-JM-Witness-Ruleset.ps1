@@ -14,7 +14,7 @@ $rs = ($raw -join [Environment]::NewLine) | ConvertFrom-Json
 if ($rs.id -ne $id -or $rs.enforcement -cne 'active' -or $rs.name -cne 'JM-Witness-Master-Protection' -or $rs.target -cne 'branch') { throw 'Unexpected ruleset; REFUSE' }
 if (@($rs.bypass_actors).Count -ne 0 -or @($rs.conditions.ref_name.include).Count -ne 1 -or $rs.conditions.ref_name.include[0] -cne '~DEFAULT_BRANCH' -or @($rs.conditions.ref_name.exclude).Count -ne 0) { throw 'Ruleset boundaries changed; REFUSE' }
 $types = @($rs.rules | ForEach-Object { $_.type } | Sort-Object)
-$initial = @('deletion','non_fast_forward','pull_request','required_linear_history' | Sort-Object)
+$initial = @(@('deletion','non_fast_forward','pull_request','required_linear_history') | Sort-Object)
 $review = @($rs.rules | Where-Object { $_.type -eq 'pull_request' })[0]
 if (($types -join ',') -cne ($initial -join ',')) {
     $status = @($rs.rules | Where-Object { $_.type -eq 'required_status_checks' })
