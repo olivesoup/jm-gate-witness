@@ -84,15 +84,7 @@ jobs:
           test "$GITHUB_REPOSITORY" = 'olivesoup/jm-gate-witness'
           test "$GITHUB_REF" = 'refs/heads/master'
           test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
-          echo "$GITHUB_SHA" | grep -Eq '^[0-9a-f]{40}        shell: bash
-        env:
-          ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
-        run: |
-          set -euo pipefail
-          test -n "$ATTESTATION_URL"
-          echo "JM_WITNESS_SIGSTORE_BOOTSTRAP_ATTESTATION_URL=$ATTESTATION_URL"
-          echo "JM_WITNESS_SIGNED_REAL_HOST_GATE=BLOCK_BOOTSTRAP_ONLY"
-
+          echo "$GITHUB_SHA" | grep -Eq '^[0-9a-f]{40}$'
           # GitHub's signed public attestation must bind this immutable master SHA.
           success=false
           for i in 1 2 3 4 5; do
