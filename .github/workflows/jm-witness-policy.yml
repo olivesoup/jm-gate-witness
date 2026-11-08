@@ -56,3 +56,7 @@ jobs:
             throw 'CAS_TAG_RULESET_SCRIPT_SYNTAX_INVALID'
           }
           Write-Output 'CAS_TAG_RULESET_SCRIPT_SYNTAX_OK_NOT_EXECUTED'
+      - name: Exercise CAS tag readback in native PowerShell StrictMode (no GitHub mutation)
+        shell: pwsh
+        run: |
+          ./tests/Test-Cas-Tag-Ruleset-Readback.ps1
