@@ -132,7 +132,6 @@ jobs:
           path: jm-witness-bootstrap-public-hash-claim.json
           if-no-files-found: error
           retention-days: 30
-          archive: false
       - name: Report attestation reference as NON-REAL-GATE evidence
         shell: bash
         env:
