@@ -64,11 +64,16 @@ def _ruleset_ready(rulesets: object) -> None:
     if rule.get("bypass_actors") != []:
         raise CasDenied("CAS_RULESET_BYPASS")
     cond = rule.get("conditions", {}).get("ref_name", {})
-    if cond.get("include") != [PREFIX + "*"] or cond.get("exclude") != []:
+    if cond.get("include") != ["refs/tags/" + PREFIX + "*"] or cond.get("exclude") != []:
         raise CasDenied("CAS_REF_TARGET_CHANGED")
     r_types = {r.get("type") for r in rule.get("rules", []) if type(r) is dict}
     if r_types != {"update", "deletion"} or len(rule.get("rules", [])) != 2:
         raise CasDenied("CAS_UPDATE_DELETE_PROTECTION_MISSING")
+    updates = [r for r in rule["rules"] if r.get("type") == "update"]
+    if (len(updates) != 1 or
+            type(updates[0].get("parameters")) is not dict or
+            updates[0]["parameters"].get("update_allows_fetch_and_merge") is not False):
+        raise CasDenied("CAS_UPDATE_RULE_PARAMETER_UNSAFE")
 
 
 def commit_synthetic_nonce(transport: Callable, *, nonce: str,
