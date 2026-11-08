@@ -31,3 +31,16 @@ jobs:
           python3 -m compileall -q witness tests
           python3 -m unittest discover -s tests -v
           echo 'JM_WITNESS_POLICY_SOURCE_PASS_NOT_SIGNER_OR_REAL_GATE'
+      - name: Parse solo-operator policy migration without executing it
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          $path = Join-Path $PWD 'scripts/Set-JM-Witness-Solo-Ruleset.ps1'
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -ne 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.ToString() }
+            throw 'SOLO_RULESET_SCRIPT_SYNTAX_INVALID'
+          }
+          Write-Output 'SOLO_RULESET_SCRIPT_SYNTAX_OK_NOT_EXECUTED'
+
