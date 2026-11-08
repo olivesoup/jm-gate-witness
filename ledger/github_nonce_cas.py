@@ -116,6 +116,20 @@ def commit_synthetic_nonce(transport: Callable, *, nonce: str,
     if type(created) is not dict or type(created.get("sha")) is not str or not SHA.fullmatch(created["sha"]):
         raise CasDenied("CAS_ANNOTATED_TAG_OBJECT_NOT_CONFIRMED")
     tag_sha = created["sha"]
+    expected_message = tag_message(nonce, claim_sha256, master_sha)
+
+    def verify_tag_object():
+        stored = transport("GET", prefix + "/git/tags/" + tag_sha, None)
+        if (type(stored) is not dict or
+            stored.get("sha") != tag_sha or
+            stored.get("tag") != name or
+            stored.get("message") != expected_message or
+            type(stored.get("object")) is not dict or
+            stored["object"].get("type") != "commit" or
+            stored["object"].get("sha") != master_sha):
+            raise CasDenied("CAS_ANNOTATED_TAG_OBJECT_READBACK_MISMATCH")
+
+    verify_tag_object()  # Tag SHA alone never binds the exact nonce and claim.
     try:
         response = transport("POST", prefix + "/git/refs", {
             "ref": "refs/tags/" + name,
@@ -130,8 +144,25 @@ def commit_synthetic_nonce(transport: Callable, *, nonce: str,
     observed = transport("GET", prefix + "/git/ref/tags/" + name, None)
     if (type(observed) is not dict or
         observed.get("ref") != "refs/tags/" + name or
-        observed.get("object", {}).get("sha") != tag_sha):
+        type(observed.get("object")) is not dict or
+        observed["object"].get("sha") != tag_sha or
+        observed["object"].get("type") != "tag"):
         raise CasDenied("CAS_LIVE_REF_READBACK_MISMATCH")
+
+    verify_tag_object()  # Detect post-write object drift before any receipt.
+    latest_rulesets = transport("GET", prefix + "/rulesets", None)
+    if (type(latest_rulesets) is not list or
+        len([r for r in latest_rulesets if type(r) is dict and
+             r.get("name") == RULESET_NAME]) != 1):
+        raise CasDenied("CAS_RULESET_CHANGED_AFTER_WRITE")
+    latest_detail = transport("GET", prefix + "/rulesets/" + str(matches[0]["id"]), None)
+    _ruleset_ready([latest_detail])
+    latest_master = transport("GET", prefix + "/branches/master", None)
+    if (type(latest_master) is not dict or
+        latest_master.get("protected") is not True or
+        type(latest_master.get("commit")) is not dict or
+        latest_master["commit"].get("sha") != master_sha):
+        raise CasDenied("CAS_MASTER_CHANGED_AFTER_WRITE")
     return {
         "schema": "JM_GITHUB_NONCE_CAS_SYNTHETIC_RECEIPT_V1",
         "nonce": nonce,
@@ -139,7 +170,7 @@ def commit_synthetic_nonce(transport: Callable, *, nonce: str,
         "tag_object_sha": tag_sha,
         "tag_ref": "refs/tags/" + name,
         "head": master_sha,
-        "atomic_ref_create": True,
+        "exclusive_ref_create_observed": True,
         "global_nonrollback_proven": False,
         "product_gate": False,
     }
