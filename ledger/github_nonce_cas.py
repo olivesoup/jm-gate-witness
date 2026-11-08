@@ -81,7 +81,15 @@ def commit_synthetic_nonce(transport: Callable, *, nonce: str,
     validate(nonce, claim_sha256, master_sha)
     prefix = "/repos/" + REPO
     rulesets = transport("GET", prefix + "/rulesets", None)
-    _ruleset_ready(rulesets)
+    if type(rulesets) is not list:
+        raise CasDenied("CAS_RULESETS_UNAVAILABLE")
+    matches = [r for r in rulesets if type(r) is dict
+               and r.get("name") == RULESET_NAME and r.get("target") == "tag"
+               and type(r.get("id")) is int]
+    if len(matches) != 1:
+        raise CasDenied("CAS_RULESET_DISCOVERY_NOT_UNIQUE")
+    detail = transport("GET", prefix + "/rulesets/" + str(matches[0]["id"]), None)
+    _ruleset_ready([detail])
     active_master = transport("GET", prefix + "/branches/master", None)
     if (type(active_master) is not dict or
         active_master.get("protected") is not True or
