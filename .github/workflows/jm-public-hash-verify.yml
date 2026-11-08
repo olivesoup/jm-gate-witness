@@ -1,0 +1,112 @@
+# Separate protected-master verifier for a PUBLIC synthetic hash claim.
+# workflow_run loads workflow definition from protected default branch, not PR HEAD.
+# Does not grant Host, issuer/CAS, VM lifecycle or product acceptance.
+name: JM Protected Public Hash Attestation Verifier
+on:
+  workflow_run:
+    workflows:
+      - JM Public Hash Witness Bootstrap - NOT PRODUCT REAL GATE
+    types: [completed]
+permissions:
+  contents: read
+  actions: read
+  attestations: read
+concurrency:
+  group: jm-public-hash-verifier-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+jobs:
+  verify-protected-signer:
+    name: jm-public-hash-signature-verification
+    if: >-
+      github.repository == 'olivesoup/jm-gate-witness' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_branch == 'master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      EXPECTED_HEAD: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Authenticate exact protected master signer run from live API
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'olivesoup/jm-gate-witness'
+          test "$GITHUB_EVENT_NAME" = 'workflow_run'
+          test "$GITHUB_REF" = 'refs/heads/master'
+          echo "$RUN_ID" | grep -Eq '^[0-9]{1,12}$'
+          echo "$EXPECTED_HEAD" | grep -Eq '^[0-9a-f]{40}$'
+          meta="$(gh api "repos/olivesoup/jm-gate-witness/actions/runs/$RUN_ID")"
+          printf '%s' "$meta" | jq -e --arg s "$EXPECTED_HEAD" --argjson run "$RUN_ID" '
+            .id == $run and
+            .repository.full_name == "olivesoup/jm-gate-witness" and
+            .path == ".github/workflows/jm-public-hash-attest.yml" and
+            .event == "workflow_dispatch" and
+            .head_branch == "master" and
+            .head_sha == $s and
+            .conclusion == "success" and
+            .status == "completed" and
+            .actor.login == "olivesoup"' >/dev/null
+          live="$(gh api repos/olivesoup/jm-gate-witness/branches/master --jq '.commit.sha')"
+          test "$live" = "$EXPECTED_HEAD"
+          echo 'JM_SIGNER_RUN_EXACT_MASTER_IDENTITY_VERIFIED'
+      - name: Checkout only exact protected signer master revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Download exact signed PUBLIC synthetic claim from signer run
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/jm-public-hash-verifier"
+          gh run download "$RUN_ID" --repo olivesoup/jm-gate-witness \
+            --name jm-public-synthetic-hash-claim \
+            --dir "$RUNNER_TEMP/jm-public-hash-verifier"
+          test -f "$RUNNER_TEMP/jm-public-hash-verifier/jm-witness-bootstrap-public-hash-claim.json"
+          test "$(stat -c %s "$RUNNER_TEMP/jm-public-hash-verifier/jm-witness-bootstrap-public-hash-claim.json")" -le 4096
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from witness.hash_claim import parse_untrusted
+          p = Path(os.environ["RUNNER_TEMP"]) / "jm-public-hash-verifier/jm-witness-bootstrap-public-hash-claim.json"
+          claim = parse_untrusted(p.read_bytes())
+          if claim["claim_kind"] != "EVIDENCE_ONLY_NOT_GATE":
+              raise SystemExit("JM_FORGED_PRODUCT_AUTHORITY")
+          if any(claim[k] != "0" * 64 for k in (
+              "source_root_sha256", "output_root_sha256",
+              "host_receipt_sha256", "release_set_sha256")):
+              raise SystemExit("JM_NON_SYNTHETIC_PRODUCT_DIGEST")
+          print("JM_PUBLIC_SYNTHETIC_ONLY")
+          PY
+      - name: Independently verify public Fulcio/Rekor identity and signed timestamp
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/jm-public-hash-verifier"
+          gh attestation verify jm-witness-bootstrap-public-hash-claim.json \
+            --repo olivesoup/jm-gate-witness \
+            --signer-workflow olivesoup/jm-gate-witness/.github/workflows/jm-public-hash-attest.yml \
+            --signer-digest "$EXPECTED_HEAD" \
+            --source-ref refs/heads/master \
+            --source-digest "$EXPECTED_HEAD" \
+            --deny-self-hosted-runners \
+            --format json > verified-bootstrap-attestation.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("verified-bootstrap-attestation.json").read_text())
+          if not isinstance(result, list) or not any(
+              isinstance(x, dict)
+              and isinstance(x.get("verificationResult"), dict)
+              and isinstance(x["verificationResult"].get("verifiedTimestamps"), list)
+              and x["verificationResult"]["verifiedTimestamps"]
+              for x in result
+          ):
+              raise SystemExit("JM_PUBLIC_SIGSTORE_SIGNED_TIMESTAMP_ABSENT")
+          print("JM_PUBLIC_BOOTSTRAP_SEPARATE_PROTECTED_WORKFLOW_CRYPTO_VERIFIED")
+          print("JM_ISSUER_CAS_HOST_VM_FIVE_REPO_GATE=BLOCK_NOT_ATTESTED")
+          PY
