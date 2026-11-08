@@ -1,0 +1,76 @@
+# STAGED ONLY. Intentionally outside .github/workflows and NOT activated.
+# Standard: standards/JM_Public_Hash_Only_Witness_Standard_v1.md
+# Must first pass exact-head independent review, trusted public ruleset,
+# explicit Judge authorization and separate Human security activation Gate.
+name: JM Public Hash Witness Bootstrap - NOT PRODUCT REAL GATE
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+concurrency:
+  group: jm-witness-protected-master-bootstrap
+  cancel-in-progress: false
+jobs:
+  public-hash-only-attestation:
+    if: github.repository == 'olivesoup/jm-gate-witness' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout ONLY public trusted witness master
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Validate no private input and source test suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "olivesoup/jm-gate-witness"
+          test "$GITHUB_REF" = "refs/heads/master"
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test -d witness
+          python3 -m unittest discover -s tests -v
+      - name: Generate PUBLIC SYNTHETIC bootstrap claim; NEVER sign product PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime
+          import secrets
+          import uuid
+          from pathlib import Path
+          from witness.hash_claim import canonical_bytes, claim_digest
+          claim = dict(
+              schema="JM_HASH_WITNESS_V1",
+              audience="olivesoup/jm-gate-witness:pet001",
+              claim_id=str(uuid.uuid4()),
+              run_nonce=secrets.token_urlsafe(36),
+              created_at=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              source_root_sha256="0" * 64,
+              output_root_sha256="0" * 64,
+              host_receipt_sha256="0" * 64,
+              release_set_sha256="0" * 64,
+              previous_claim_sha256="0" * 64,
+              sequence=1,
+              claim_kind="EVIDENCE_ONLY_NOT_GATE")
+          out = Path("jm-witness-bootstrap-public-hash-claim.json")
+          out.write_bytes(canonical_bytes(claim))
+          print("JM_WITNESS_BOOTSTRAP_SOURCE_ONLY_SHA256=" + claim_digest(claim))
+          print("JM_WITNESS_REAL_HOST_GATE=BLOCK_NOT_ATTESTED")
+          PY
+      - name: Sigstore OIDC attest PUBLIC bootstrap claim only
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: jm-witness-bootstrap-public-hash-claim.json
+      - name: Report attestation reference as NON-REAL-GATE evidence
+        shell: bash
+        env:
+          ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+        run: |
+          set -euo pipefail
+          test -n "$ATTESTATION_URL"
+          echo "JM_WITNESS_SIGSTORE_BOOTSTRAP_ATTESTATION_URL=$ATTESTATION_URL"
+          echo "JM_WITNESS_SIGNED_REAL_HOST_GATE=BLOCK_BOOTSTRAP_ONLY"
