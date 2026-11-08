@@ -24,10 +24,18 @@ function Assert-Rule($rs) {
   $types = @($rs.rules | ForEach-Object { $_.type } | Sort-Object)
   if (($types -join '|') -cne 'deletion|update') { throw 'CAS_TAG_UPDATE_DELETE_PROTECTION_MISSING' }
   $update = @($rs.rules | Where-Object { $_.type -ceq 'update' })
-  if ($update.Count -ne 1 -or
-      $null -eq $update[0].parameters -or
-      $update[0].parameters.update_allows_fetch_and_merge -ne $false) {
-    throw 'CAS_TAG_UPDATE_RULE_PARAMETERS_MISSING_OR_PERMISSIVE'
+  if ($update.Count -ne 1) { throw 'CAS_TAG_UPDATE_RULE_MISSING_OR_DUPLICATE' }
+  # GitHub's tag-rule GET omits 'parameters' even when the POST provided
+  # update_allows_fetch_and_merge=false (branch-specific setting).
+  # StrictMode forbids reading absent members through dot notation.
+  $paramsProp = $update[0].PSObject.Properties['parameters']
+  if ($null -ne $paramsProp -and $null -ne $paramsProp.Value) {
+    $params = $paramsProp.Value
+    $field = $params.PSObject.Properties['update_allows_fetch_and_merge']
+    if ($null -eq $field -or $field.Value -isnot [bool] -or
+        $field.Value -ne $false -or @($params.PSObject.Properties).Count -ne 1) {
+      throw 'CAS_TAG_UPDATE_RULE_PARAMETERS_PERMISSIVE_OR_UNEXPECTED'
+    }
   }
 }
 
