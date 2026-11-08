@@ -70,10 +70,16 @@ def _ruleset_ready(rulesets: object) -> None:
     if r_types != {"update", "deletion"} or len(rule.get("rules", [])) != 2:
         raise CasDenied("CAS_UPDATE_DELETE_PROTECTION_MISSING")
     updates = [r for r in rule["rules"] if r.get("type") == "update"]
-    if (len(updates) != 1 or
-            type(updates[0].get("parameters")) is not dict or
-            updates[0]["parameters"].get("update_allows_fetch_and_merge") is not False):
-        raise CasDenied("CAS_UPDATE_RULE_PARAMETER_UNSAFE")
+    if len(updates) != 1:
+        raise CasDenied("CAS_UPDATE_RULE_MISSING_OR_DUPLICATE")
+    # GitHub GET omits the branch-only update parameter for tag rules.
+    # The exact TAG update+deletion protections and zero-bypass still apply.
+    # If returned, permit only an explicit false value, no other keys.
+    if "parameters" in updates[0] and updates[0]["parameters"] is not None:
+        params = updates[0]["parameters"]
+        if (type(params) is not dict or
+                params != {"update_allows_fetch_and_merge": False}):
+            raise CasDenied("CAS_UPDATE_RULE_PARAMETER_UNSAFE")
 
 
 def commit_synthetic_nonce(transport: Callable, *, nonce: str,
