@@ -74,13 +74,34 @@ try {
       if ([DateTime]::UtcNow -gt $until) { return [pscustomobject]@{ code=99; conflict=$false; ok=$false } }
       Start-Sleep -Milliseconds 30
     }
+    $startedUtc=[DateTime]::UtcNow.ToString('o')
     $output=@(& gh api --method POST "repos/$repository/git/refs" -f "ref=$theRef" -f "sha=$theSha" 2>&1)
     $code=[int]$LASTEXITCODE
+    $finishedUtc=[DateTime]::UtcNow.ToString('o')
     $msg=$output -join [Environment]::NewLine
+    $verified=$false
+    if ($code -eq 0) {
+      try {
+        $parsed=$msg | ConvertFrom-Json -ErrorAction Stop
+        if ($null -ne $parsed -and
+            $parsed -is [pscustomobject] -and
+            $parsed.ref -ceq $theRef -and
+            $parsed.object.sha -ceq $theSha -and
+            $parsed.object.type -ceq 'tag') { $verified=$true }
+      } catch { $verified=$false }
+    }
+    $conflictStatus=0
+    if ($code -ne 0) {
+      $m=[regex]::Match($msg,'HTTP (409|422)(?![0-9])')
+      if ($m.Success) { $conflictStatus=[int]$m.Groups[1].Value }
+    }
     return [pscustomobject]@{
       code=$code
-      conflict=[bool]($code -ne 0 -and $msg -match 'HTTP (409|422)')
-      ok=[bool]($code -eq 0 -and $msg.Contains($theRef) -and $msg.Contains($theSha))
+      conflict=[bool]($conflictStatus -eq 409 -or $conflictStatus -eq 422)
+      httpConflictStatus=$conflictStatus
+      ok=[bool]$verified
+      startedUtc=$startedUtc
+      finishedUtc=$finishedUtc
     }
   }
   $jobs+=Start-Job -ScriptBlock $writer -ArgumentList $repo,$ref,$tagSha,$barrier,$ready1
@@ -114,6 +135,10 @@ try {
     master_sha=$master
     script_blob=$blob[0]
     writer_codes=@($results | ForEach-Object {[int]$_.code})
+    writer_conflict_http_status=@($results | ForEach-Object {[int]$_.httpConflictStatus})
+    writer_started_utc=@($results | ForEach-Object { [string]$_.startedUtc })
+    writer_finished_utc=@($results | ForEach-Object { [string]$_.finishedUtc })
+    barrier_note='Ready-barrier is not proof of simultaneous GitHub API ingress'
     protected_ruleset=$ruleId
     exactly_one_winner=$true
     second_writer_conflicted=$true
