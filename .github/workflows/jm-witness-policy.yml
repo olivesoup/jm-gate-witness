@@ -1,0 +1,33 @@
+# Public-only source CI; deliberately no signing, private checkouts, or elevated token.
+name: JM Witness Policy CI
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: jm-witness-policy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  witness-policy:
+    name: jm-witness-policy
+    if: github.repository == 'olivesoup/jm-gate-witness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout public witness source only
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Public canonicalizer source checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "olivesoup/jm-gate-witness"
+          test -d witness && test -d tests
+          python3 -m compileall -q witness tests
+          python3 -m unittest discover -s tests -v
+          echo 'JM_WITNESS_POLICY_SOURCE_PASS_NOT_SIGNER_OR_REAL_GATE'
