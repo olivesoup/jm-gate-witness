@@ -87,15 +87,15 @@ function Invoke-RestMethod {
     throw [System.Net.WebException]::new('DNS/TLS/network: fake HTTP 422')
   }
   if ($script:mockMode -ceq 'wrong-ref') {
-    return [pscustomobject]@{ref='refs/tags/jm-cas/v1/other';object=[pscustomobject]@{sha=$sha;type='tag'}}
+    return [pscustomobject]@{ref='refs/tags/jm-cas/v1/other';object=[pscustomobject]@{sha=$script:expectedTagSha;type='tag'}}
   }
   if ($script:mockMode -ceq 'wrong-type') {
-    return [pscustomobject]@{ref=$theRef;object=[pscustomobject]@{sha=$sha;type='commit'}}
+    return [pscustomobject]@{ref=$theRef;object=[pscustomobject]@{sha=$script:expectedTagSha;type='commit'}}
   }
   if ($script:mockMode -ceq 'wrong-sha') {
     return [pscustomobject]@{ref=$theRef;object=[pscustomobject]@{sha=('0'*40);type='tag'}}
   }
-  return [pscustomobject]@{ref=$theRef;object=[pscustomobject]@{sha=$sha;type='tag'}}
+  return [pscustomobject]@{ref=$theRef;object=[pscustomobject]@{sha=$script:expectedTagSha;type='tag'}}
 }
 function Test-Writer([string]$tagSha=$sha) {
   $script:expectedTagSha=$tagSha
@@ -149,7 +149,6 @@ try {
   $script:mockMode='ok'
 
   $secondValid=Test-Writer -tagSha $otherSha
-  Write-Output ('CAS_TEST_DISTINCT_CLAIM_TRACE validCode=' + $valid.code + ' firstSha=' + $valid.attemptedTagSha + ' nextCode=' + $secondValid.code + ' nextSha=' + $secondValid.attemptedTagSha + ' wanted=' + $otherSha + ' validNext=' + $secondValid.ok)
   if (-not $secondValid.ok -or $secondValid.attemptedTagSha -cne $otherSha -or
       $valid.attemptedTagSha -ceq $secondValid.attemptedTagSha) {
     throw 'CAS_RACE_DIFFERENT_CLAIMS_NOT_VERIFIED'
