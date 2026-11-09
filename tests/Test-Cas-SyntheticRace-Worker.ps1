@@ -149,6 +149,7 @@ try {
   $script:mockMode='ok'
 
   $secondValid=Test-Writer -tagSha $otherSha
+  Write-Output ('CAS_TEST_DISTINCT_CLAIM_TRACE validCode=' + $valid.code + ' firstSha=' + $valid.attemptedTagSha + ' nextCode=' + $secondValid.code + ' nextSha=' + $secondValid.attemptedTagSha + ' wanted=' + $otherSha + ' validNext=' + $secondValid.ok)
   if (-not $secondValid.ok -or $secondValid.attemptedTagSha -cne $otherSha -or
       $valid.attemptedTagSha -ceq $secondValid.attemptedTagSha) {
     throw 'CAS_RACE_DIFFERENT_CLAIMS_NOT_VERIFIED'
