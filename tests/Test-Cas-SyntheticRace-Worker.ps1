@@ -18,6 +18,8 @@ if ($writers.Count -ne 1) { throw 'CAS_RACE_WRITER_BLOCK_NOT_UNIQUE' }
 $writer= & ([ScriptBlock]::Create($writers[0].Right.Extent.Text))
 $theRef='refs/tags/jm-cas/v1/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 $sha='b' * 40
+$otherSha='c' * 40
+$script:expectedTagSha=$sha
 $go=Join-Path ([IO.Path]::GetTempPath()) ('cas-unit-go-'+[guid]::NewGuid().ToString('N'))
 $ready=Join-Path ([IO.Path]::GetTempPath()) ('cas-unit-ready-'+[guid]::NewGuid().ToString('N'))
 $script:mockMode='ok'
@@ -68,10 +70,14 @@ function Invoke-RestMethod {
     throw 'CAS_TEST_UNEXPECTED_REST_TARGET_OR_AUTH'
   }
   $parsedBody=$Body | ConvertFrom-Json -ErrorAction Stop
-  if ($parsedBody.ref -cne $theRef -or $parsedBody.sha -cne $sha) {
+  if ($parsedBody.ref -cne $theRef -or $parsedBody.sha -cne $script:expectedTagSha) {
     throw 'CAS_TEST_WRONG_REF_REQUEST_BODY'
   }
   if ($script:mockMode -ceq 'http') {
+    $response=[System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]$script:mockStatus)
+    throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('Genuine typed webcmdlet HTTP test fixture', $response)
+  }
+  if ($script:mockMode -ceq 'forged-http-response') {
     throw [JMTestHttpException]::new($script:mockStatus)
   }
   if ($script:mockMode -ceq 'text-spoof') {
@@ -91,8 +97,9 @@ function Invoke-RestMethod {
   }
   return [pscustomobject]@{ref=$theRef;object=[pscustomobject]@{sha=$sha;type='tag'}}
 }
-function Test-Writer {
-  return (& $writer 'olivesoup/jm-gate-witness' $theRef $sha $go $ready)
+function Test-Writer([string]$tagSha=$sha) {
+  $script:expectedTagSha=$tagSha
+  return (& $writer 'olivesoup/jm-gate-witness' $theRef $tagSha $go $ready)
 }
 function Assert-Unknown([string]$scenario) {
   $result=Test-Writer
@@ -127,6 +134,10 @@ try {
     Assert-Unknown ('real-http-'+$status)
   }
 
+  $script:mockMode='forged-http-response'
+  $script:mockStatus=422
+  Assert-Unknown 'forged-object-with-Response-StatusCode-422'
+
   $script:mockMode='text-spoof'
   Assert-Unknown 'fake-error-text-containing-HTTP-422'
   $script:mockMode='transport'
@@ -137,19 +148,28 @@ try {
   $script:mockAuthFails=$false
   $script:mockMode='ok'
 
-  $results=@($valid,$valid)
+  $secondValid=Test-Writer -tagSha $otherSha
+  if (-not $secondValid.ok -or $secondValid.attemptedTagSha -cne $otherSha -or
+      $valid.attemptedTagSha -ceq $secondValid.attemptedTagSha) {
+    throw 'CAS_RACE_DIFFERENT_CLAIMS_NOT_VERIFIED'
+  }
+  $results=@($valid,$secondValid)
   if (@($results | Where-Object {$_.ok -eq $true -and $_.code -eq 0}).Count -ne 2) {
     throw 'CAS_RACE_DOUBLE_SUCCESS_FIXTURE_BAD'
   }
   $sourceBytes=[IO.File]::ReadAllText($source)
   if ($sourceBytes -notmatch 'CAS_RACE_ONE_WINNER_ONE_CONFLICT_NOT_PROVEN' -or
+      $sourceBytes -notmatch 'CAS_RACE_WINNER_LOSER_DIFFERENT_SUBJECTS_UNVERIFIED' -or
+      $sourceBytes -notmatch 'CAS_RACE_TWO_DIFFERENT_CLAIMS_NOT_PROVEN' -or
+      $sourceBytes -notmatch 'Microsoft.PowerShell.Commands.HttpResponseException' -or
+      $sourceBytes -notmatch 'System.Net.HttpWebResponse' -or
       $sourceBytes -match '\[regex\]::Match\(\$msg' -or
       $sourceBytes -match 'gh api --method POST "repos/\$repository/git/refs"') {
     throw 'CAS_RACE_STATUS_SPOOF_FIX_NOT_ENFORCED'
   }
   if ($script:mockRestCalls -lt 13) { throw 'CAS_RACE_HTTP_NEGATIVE_FIXTURES_NOT_EXERCISED' }
   $global:LASTEXITCODE=0
-  Write-Output 'CAS_RACE_STRUCTURED_HTTP_PROVIDER_STATUS_NEGATIVE_PASS_NO_GITHUB_API'
+  Write-Output 'CAS_RACE_TYPED_HTTP_AND_DIFFERENT_CLAIMS_NEGATIVE_PASS_NO_GITHUB_API'
 } finally {
   Remove-Item -LiteralPath $go,$ready -Force -ErrorAction SilentlyContinue
 }
