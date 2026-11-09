@@ -46,18 +46,32 @@ $master=Read-Master
 $nonce=[guid]::NewGuid().ToString('N').ToLowerInvariant()
 $name='jm-cas/v1/'+$nonce
 $ref='refs/tags/'+$name
-$plain='JM_PUBLIC_SYNTHETIC_CAS_RACE_V1|'+$nonce+'|'+$master+'|EVIDENCE_ONLY_NOT_GATE'
-$hash=[Security.Cryptography.SHA256]::Create()
-try {
-  $digest=-join ($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($plain)) | ForEach-Object {$_.ToString('x2')})
-} finally {$hash.Dispose()}
-$message='{"schema":"JM_PUBLIC_SYNTHETIC_CAS_RACE_V1","nonce":"'+$nonce+'","claim_sha256":"'+$digest+'","protected_master_sha":"'+$master+'","product_gate":false}'+[Environment]::NewLine
-$createdRaw=& gh api --method POST "repos/$repo/git/tags" -f "tag=$name" -f "message=$message" -f "object=$master" -f 'type=commit'
-if ($LASTEXITCODE -ne 0) { throw 'CAS_RACE_TAG_OBJECT_CREATE_FAILED' }
-$created=($createdRaw -join [Environment]::NewLine) | ConvertFrom-Json
-if ($created.sha -cnotmatch '^[a-f0-9]{40}$') { throw 'CAS_RACE_TAG_SHA_INVALID' }
-$tagSha=[string]$created.sha
-Assert-Tag $tagSha $name $message $master
+# Two valid DIFFERENT public claims share the same nonce ref, not the same
+# object SHA. Pre-create only the two public tag OBJECTS, never two tag REFS.
+$claimDigests=@()
+$messages=@()
+$tagShas=@()
+for ($candidate=0; $candidate -lt 2; $candidate++) {
+  $plain='JM_PUBLIC_SYNTHETIC_CAS_RACE_V1|'+$nonce+'|'+$master+'|EVIDENCE_ONLY_NOT_GATE|candidate='+$candidate
+  $hash=[Security.Cryptography.SHA256]::Create()
+  try {
+    $digest=-join ($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($plain)) | ForEach-Object {$_.ToString('x2')})
+  } finally {$hash.Dispose()}
+  $message='{"schema":"JM_PUBLIC_SYNTHETIC_CAS_RACE_V1","nonce":"'+$nonce+'","claim_sha256":"'+$digest+'","protected_master_sha":"'+$master+'","product_gate":false}'+[Environment]::NewLine
+  $createdRaw=& gh api --method POST "repos/$repo/git/tags" -f "tag=$name" -f "message=$message" -f "object=$master" -f 'type=commit'
+  if ($LASTEXITCODE -ne 0) { throw 'CAS_RACE_TAG_OBJECT_CREATE_FAILED' }
+  $created=($createdRaw -join [Environment]::NewLine) | ConvertFrom-Json
+  if ($created.sha -cnotmatch '^[a-f0-9]{40}$') { throw 'CAS_RACE_TAG_SHA_INVALID' }
+  $tagSha=[string]$created.sha
+  Assert-Tag $tagSha $name $message $master
+  $claimDigests+= $digest
+  $messages+= $message
+  $tagShas+= $tagSha
+}
+if ($tagShas.Count -ne 2 -or $tagShas[0] -ceq $tagShas[1] -or
+    $claimDigests[0] -ceq $claimDigests[1]) {
+  throw 'CAS_RACE_TWO_DIFFERENT_CLAIMS_NOT_PROVEN'
+}
 Assert-Policy
 if ((Read-Master) -cne $master) { throw 'CAS_RACE_MASTER_MOVED_BEFORE_COMPETE' }
 $barrier=Join-Path $env:TEMP ('JM-CAS-GO-'+$nonce)
@@ -105,18 +119,20 @@ try {
         $code=0
       }
     } catch {
-      # The exception text is untrusted. Only an actual provider HTTP response
-      # has an authoritative status, and transport/auth failures are BLOCK.
+      # Fail closed against arbitrary fake Exception.Response.StatusCode.
+      # PS7 webcmdlet returns HttpResponseException+HttpResponseMessage;
+      # PS5.1 returns WebException+HttpWebResponse. No duck typing.
       $exception=$_.Exception
-      $responseProperty=$exception.PSObject.Properties['Response']
-      if ($null -ne $responseProperty -and $null -ne $responseProperty.Value) {
-        $statusProperty=$responseProperty.Value.PSObject.Properties['StatusCode']
-        if ($null -ne $statusProperty -and $null -ne $statusProperty.Value) {
-          $numericStatus=[int]$statusProperty.Value
-          if ($numericStatus -eq 409 -or $numericStatus -eq 422) {
-            $conflictStatus=$numericStatus
-          }
-        }
+      $httpStatus=0
+      if ($exception.GetType().FullName -ceq 'Microsoft.PowerShell.Commands.HttpResponseException' -and
+          $exception.Response -is [System.Net.Http.HttpResponseMessage]) {
+        $httpStatus=[int]$exception.Response.StatusCode
+      } elseif ($exception -is [System.Net.WebException] -and
+                $exception.Response -is [System.Net.HttpWebResponse]) {
+        $httpStatus=[int]$exception.Response.StatusCode
+      }
+      if ($httpStatus -eq 409 -or $httpStatus -eq 422) {
+        $conflictStatus=$httpStatus
       }
     } finally {
       $credential=@()
@@ -128,12 +144,13 @@ try {
       conflict=[bool]($conflictStatus -eq 409 -or $conflictStatus -eq 422)
       httpConflictStatus=$conflictStatus
       ok=[bool]$verified
+      attemptedTagSha=$theSha
       startedUtc=$startedUtc
       finishedUtc=$finishedUtc
     }
   }
-  $jobs+=Start-Job -ScriptBlock $writer -ArgumentList $repo,$ref,$tagSha,$barrier,$ready1
-  $jobs+=Start-Job -ScriptBlock $writer -ArgumentList $repo,$ref,$tagSha,$barrier,$ready2
+  $jobs+=Start-Job -ScriptBlock $writer -ArgumentList $repo,$ref,$tagShas[0],$barrier,$ready1
+  $jobs+=Start-Job -ScriptBlock $writer -ArgumentList $repo,$ref,$tagShas[1],$barrier,$ready2
   $deadline=[DateTime]::UtcNow.AddSeconds(20)
   while (-not ((Test-Path -LiteralPath $ready1) -and (Test-Path -LiteralPath $ready2))) {
     if ([DateTime]::UtcNow -gt $deadline) { throw 'CAS_RACE_WRITERS_NEVER_READY' }
@@ -143,23 +160,34 @@ try {
   $finished=@(Wait-Job -Job $jobs -Timeout 45)
   if ($finished.Count -ne 2) { throw 'CAS_RACE_WRITER_TIMEOUT' }
   $results=@($jobs | ForEach-Object {Receive-Job -Job $_ -ErrorAction Stop})
-  if ($results.Count -ne 2 -or
-      @($results | Where-Object {$_.ok -eq $true -and $_.code -eq 0}).Count -ne 1 -or
-      @($results | Where-Object {$_.conflict -eq $true -and $_.code -ne 0}).Count -ne 1) {
+  $wins=@($results | Where-Object {$_.ok -eq $true -and $_.code -eq 0})
+  $losers=@($results | Where-Object {$_.conflict -eq $true -and $_.code -ne 0})
+  if ($results.Count -ne 2 -or $wins.Count -ne 1 -or $losers.Count -ne 1) {
     throw 'CAS_RACE_ONE_WINNER_ONE_CONFLICT_NOT_PROVEN'
+  }
+  $winnerTagSha=[string]$wins[0].attemptedTagSha
+  $loserTagSha=[string]$losers[0].attemptedTagSha
+  if ($winnerTagSha -ceq $loserTagSha -or
+      $winnerTagSha -cnotin $tagShas -or $loserTagSha -cnotin $tagShas) {
+    throw 'CAS_RACE_WINNER_LOSER_DIFFERENT_SUBJECTS_UNVERIFIED'
   }
   Assert-Policy
   if ((Read-Master) -cne $master) { throw 'CAS_RACE_MASTER_MOVED_AFTER_COMPETE' }
   $observed=Read-Gh "repos/$repo/git/ref/tags/$name"
-  if ($observed.ref -cne $ref -or $observed.object.sha -cne $tagSha -or
+  if ($observed.ref -cne $ref -or $observed.object.sha -cne $winnerTagSha -or
+      $observed.object.sha -ceq $loserTagSha -or
       $observed.object.type -cne 'tag') { throw 'CAS_RACE_PROTECTED_REF_READBACK_MISMATCH' }
-  Assert-Tag $tagSha $name $message $master
+  Assert-Tag $tagShas[0] $name $messages[0] $master
+  Assert-Tag $tagShas[1] $name $messages[1] $master
   $receipt=[ordered]@{
     schema='JM_PUBLIC_SYNTHETIC_LIVE_CAS_RACE_V1'
-    status='CAS_SYNTHETIC_ONE_WINNER_NOT_PRODUCT_GATE'
+    status='CAS_SYNTHETIC_DIFFERENT_CLAIMS_ONE_REF_OBSERVED_NONPRODUCT'
     nonce=$nonce
     tag_ref=$ref
-    tag_sha=$tagSha
+    winner_tag_sha=$winnerTagSha
+    rejected_candidate_tag_sha=$loserTagSha
+    two_distinct_claim_sha256=@($claimDigests)
+    http_422_may_be_validation_error=$true
     master_sha=$master
     script_blob=$blob[0]
     writer_codes=@($results | ForEach-Object {[int]$_.code})
@@ -169,13 +197,13 @@ try {
     barrier_note='Ready-barrier is not proof of simultaneous GitHub API ingress'
     protected_ruleset=$ruleId
     exactly_one_winner=$true
-    second_writer_conflicted=$true
+    second_writer_received_409_or_422=$true
     globally_nonrollback_proven=$false
     product_real_gate=$false
   }
   $receiptPath=Join-Path 'D:\JavaModernization\Testing' ('JM-CAS-Synthetic-Race-'+$nonce+'.json')
   [IO.File]::WriteAllText($receiptPath,($receipt | ConvertTo-Json -Compress -Depth 8),[Text.UTF8Encoding]::new($false))
-  Write-Output ('CAS_SYNTHETIC_LIVE_RACE_PASS_ONE_WINNER_ONE_CONFLICT_NONCE='+$nonce)
+  Write-Output ('CAS_SYNTHETIC_DIFFERENT_CLAIMS_ONE_REF_OBSERVED_NONCE='+$nonce)
   Write-Output 'CAS_PRODUCT_GLOBAL_NONROLLBACK_AND_VM_GATE_BLOCK'
 } finally {
   foreach ($job in $jobs) {
